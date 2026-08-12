@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1041213751936",
+    "project_id": "classes-management-pro",
+    "storage_bucket": "classes-management-pro.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1041213751936:android:d6e70ae6436f1783041c65",
+        "android_client_info": {
+          "package_name": "com.example.classes_pro_admin"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD5Xn2siwTFkyNv_pZiXa-gmRkKJG-Js_k"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

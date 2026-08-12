@@ -1,0 +1,192 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Strict rules require users/{uid} to exist before app data can be read.
+    // Before deploying, create/verify at least one active admin and run the
+    // in-app "Backfill Missing Permissions" action from Staff & Roles.
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function userDocExists() {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function currentUser() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    // All app data access requires an authenticated active profile.
+    function isActive() {
+      return userDocExists() && currentUser().status == 'active';
+    }
+
+    // Admin role has full access, regardless of individual permission flags.
+    function isAdmin() {
+      return isActive() && currentUser().role == 'admin';
+    }
+
+    function isStudent() {
+      return isActive() && currentUser().role == 'student';
+    }
+
+    function ownsStudentRecord(studentRecordId) {
+      return isStudent() &&
+        currentUser().keys().hasAll(['studentRecordId']) &&
+        currentUser().studentRecordId == studentRecordId;
+    }
+
+    function ownsStudentData(data) {
+      return isStudent() && (
+        (data.keys().hasAll(['studentId']) &&
+          currentUser().keys().hasAll(['studentId']) &&
+          data.studentId == currentUser().studentId) ||
+        (data.keys().hasAll(['student_id']) &&
+          currentUser().keys().hasAll(['studentId']) &&
+          data.student_id == currentUser().studentId) ||
+        (data.keys().hasAll(['student_id']) &&
+          currentUser().keys().hasAll(['studentNumericId']) &&
+          data.student_id == currentUser().studentNumericId)
+      );
+    }
+
+    function isStudentProfileCreation() {
+      return request.resource.data.role == 'student' &&
+        request.resource.data.status == 'active' &&
+        request.resource.data.studentRecordId is string &&
+        request.resource.data.studentId is string &&
+        request.resource.data.loginId is string;
+    }
+
+    // Non-admin access is driven by users/{uid}.permissions dotted keys.
+    function hasPermission(permissionKey) {
+      return isAdmin() ||
+        (isActive() && currentUser().permissions[permissionKey] == true);
+    }
+
+    function canBackupExport() {
+      return hasPermission('backup.export');
+    }
+
+    function canBackupRestore() {
+      return hasPermission('backup.restore');
+    }
+
+    function protectedUserFieldsChanged() {
+      return request.resource.data.diff(resource.data).affectedKeys()
+        .hasAny(['role', 'status', 'permissions']);
+    }
+
+    match /users/{userId} {
+      allow get: if isActive() &&
+        (request.auth.uid == userId || hasPermission('staff.manage'));
+      allow list: if hasPermission('staff.manage');
+      allow create: if hasPermission('staff.manage') ||
+        (hasPermission('students.create') && isStudentProfileCreation());
+      allow update: if (hasPermission('staff.manage') &&
+          (isAdmin() ||
+            request.auth.uid != userId ||
+            !protectedUserFieldsChanged())) ||
+        (isStudent() && request.auth.uid == userId &&
+          request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['mustChangePassword', 'updatedAt']));
+      allow delete: if hasPermission('staff.manage') &&
+        (isAdmin() || request.auth.uid != userId);
+    }
+
+    match /students/{docId} {
+      allow read: if hasPermission('students.view') ||
+        hasPermission('reports.view') ||
+        canBackupExport() || ownsStudentRecord(docId);
+      allow create: if hasPermission('students.create') || canBackupRestore();
+      allow update: if hasPermission('students.edit') || canBackupRestore();
+      allow delete: if hasPermission('students.delete') || canBackupRestore();
+    }
+
+    match /enquiries/{docId} {
+      allow read: if hasPermission('students.view') ||
+        hasPermission('reports.view') ||
+        canBackupExport();
+      allow create: if hasPermission('students.create') || canBackupRestore();
+      allow update: if hasPermission('students.edit') || canBackupRestore();
+      allow delete: if hasPermission('students.delete') || canBackupRestore();
+    }
+
+    match /attendances/{docId} {
+      allow read: if hasPermission('attendance.view') ||
+        hasPermission('reports.view') ||
+        canBackupExport() || ownsStudentData(resource.data);
+      allow create, update: if hasPermission('attendance.mark') ||
+        canBackupRestore();
+      allow delete: if hasPermission('attendance.editPast') ||
+        canBackupRestore();
+    }
+
+    match /fee_payments/{docId} {
+      allow read: if hasPermission('fees.view') ||
+        hasPermission('fees.viewHistory') ||
+        hasPermission('reports.view') ||
+        canBackupExport() || ownsStudentData(resource.data);
+      allow create: if hasPermission('fees.collect') || canBackupRestore();
+      allow update: if hasPermission('fees.editPaymentHistory') ||
+        hasPermission('fees.deletePayment') ||
+        canBackupRestore();
+      allow delete: if hasPermission('fees.deletePayment') ||
+        canBackupRestore();
+    }
+
+    match /enrollments/{docId} {
+      allow read: if hasPermission('enrollments.view') ||
+        hasPermission('fees.view') ||
+        hasPermission('reports.view') ||
+        canBackupExport() || ownsStudentData(resource.data);
+      allow create, update, delete: if hasPermission('enrollments.manage') ||
+        hasPermission('fees.editPlan') ||
+        canBackupRestore();
+    }
+
+    match /courses/{docId} {
+      allow read: if hasPermission('courses.view') ||
+        hasPermission('courses.manage') ||
+        canBackupExport();
+      allow create, update, delete: if hasPermission('courses.manage') ||
+        canBackupRestore();
+    }
+
+    match /batches/{docId} {
+      allow read: if hasPermission('batches.view') ||
+        hasPermission('batches.manage') ||
+        canBackupExport();
+      allow create, update, delete: if hasPermission('batches.manage') ||
+        canBackupRestore();
+    }
+
+    match /reminders/{docId} {
+      allow read: if hasPermission('reminders.view') || canBackupExport();
+      allow create: if hasPermission('reminders.create') || canBackupRestore();
+      allow update: if hasPermission('reminders.edit') || canBackupRestore();
+      allow delete: if hasPermission('reminders.delete') || canBackupRestore();
+    }
+
+    match /message_templates/{docId} {
+      allow read: if hasPermission('templates.use') ||
+        hasPermission('templates.manage') ||
+        canBackupExport();
+      allow create, update, delete: if hasPermission('templates.manage') ||
+        canBackupRestore();
+    }
+
+    match /settings/{docId} {
+      allow read: if isActive();
+      allow write: if hasPermission('settings.manage') || canBackupRestore();
+    }
+
+    // Report/export helper collections should remain closed unless explicitly
+    // added here with reports.view/admin-only rules.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
