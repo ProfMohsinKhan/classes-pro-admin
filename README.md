@@ -21,7 +21,7 @@ Classes Pro Admin is designed for coaching institutes and tutorial centres that 
 
 ## Product overview
 
-![Feature map](docs/images/feature-map.svg)
+![Feature map](docs/images/feature-map.png)
 
 ### Core capabilities
 
@@ -44,7 +44,7 @@ The same Flutter codebase targets Android, iOS, Web, Windows, macOS, and Linux. 
 
 ## Architecture
 
-![Application architecture](docs/images/architecture.svg)
+![Application architecture](docs/images/architecture.png)
 
 The offline foundation uses Drift/SQLite as the local source for supported entities. Mutations are recorded in a deduplicated sync queue, pushed to Firestore, and followed by conflict-aware remote pulls. Pending local changes are protected from being overwritten by older remote data.
 
