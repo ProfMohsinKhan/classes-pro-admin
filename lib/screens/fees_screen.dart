@@ -409,13 +409,16 @@ class _FeesScreenState extends State<FeesScreen> {
     );
   }
 
+  static bool _isSameStudent(StudentModel a, StudentModel b) {
+    if (a.numericId != null && b.numericId != null) {
+      return a.numericId == b.numericId;
+    }
+    return a.id.isNotEmpty && a.id == b.id;
+  }
+
   _StudentFeeSummary? _summaryForStudent(_StudentFeeSummary summary) {
     for (final item in _feeSummaries) {
-      if (item.student.numericId != null &&
-          item.student.numericId == summary.student.numericId) {
-        return item;
-      }
-      if (item.student.id == summary.student.id) return item;
+      if (_isSameStudent(item.student, summary.student)) return item;
     }
     return null;
   }
@@ -455,9 +458,14 @@ class _FeesScreenState extends State<FeesScreen> {
     if (plannedRecords.isNotEmpty) {
       return plannedRecords.map((record) {
         final paid = record.paidAmount;
-        final amount = record.isPaid
-            ? record.totalAmount
-            : record.totalAmount + paid;
+        final pending = record.pendingAmount;
+        final double plannedAmount;
+        if (record.isPaid) {
+          plannedAmount = record.totalAmount > paid ? record.totalAmount : paid;
+        } else {
+          final sum = paid + pending;
+          plannedAmount = sum > 0 ? sum : record.totalAmount;
+        }
         final status = record.isPaid
             ? 'Paid'
             : paid > 0
@@ -465,7 +473,7 @@ class _FeesScreenState extends State<FeesScreen> {
             : 'Pending';
         return FeeInstallmentRow(
           number: record.installmentNo ?? 1,
-          amount: amount <= 0 ? record.totalAmount : amount,
+          amount: plannedAmount > 0 ? plannedAmount : record.totalAmount,
           paidAmount: paid,
           dueDate: record.dueDate ?? DateTime.now(),
           status: status,
@@ -686,12 +694,14 @@ class _FeesScreenState extends State<FeesScreen> {
           : remainingAmount;
       remainingAmount -= applied;
       final newPending = record.pendingAmount - applied;
+      final newPaid = record.paidAmount + applied;
       final updated = record.copyWith(
         data: {
           ...record.data,
-          'amount_paid': (record.paidAmount + applied).toStringAsFixed(2),
+          'amount_paid': newPaid.toStringAsFixed(2),
           'total_amount': newPending <= 0
-              ? record.totalAmount.toStringAsFixed(2)
+              ? (newPaid > record.totalAmount ? newPaid : record.totalAmount)
+                  .toStringAsFixed(2)
               : newPending.toStringAsFixed(2),
           // Keep every legacy balance alias in sync. Some older fee-plan
           // records include `dueAmount`, which takes precedence when the
@@ -777,7 +787,7 @@ class _FeesScreenState extends State<FeesScreen> {
     if (!mounted) return;
     setState(() {
       _feeSummaries = _feeSummaries.map((item) {
-        if (item.student.numericId != summary.student.numericId) return item;
+        if (!_isSameStudent(item.student, summary.student)) return item;
         final recordsById = {
           for (final record in item.records) record.docId: record,
         };
@@ -1146,7 +1156,7 @@ class _FeesScreenState extends State<FeesScreen> {
     if (!mounted) return;
     setState(() {
       _feeSummaries = _feeSummaries.map((current) {
-        if (current.student.numericId != summary.student.numericId) {
+        if (!_isSameStudent(current.student, summary.student)) {
           return current;
         }
         return _StudentFeeSummary.fromData(
@@ -1311,7 +1321,7 @@ class _FeesScreenState extends State<FeesScreen> {
     );
     setState(() {
       _feeSummaries = _feeSummaries.map((item) {
-        if (item.student.numericId != summary.student.numericId) return item;
+        if (!_isSameStudent(item.student, summary.student)) return item;
         return _StudentFeeSummary.fromData(
           student: item.student,
           enrollment: updatedEnrollment,
@@ -2751,17 +2761,26 @@ class _StudentFeeSummary {
     required _CourseOption? course,
     required List<_FeeRecord> records,
   }) {
-    final totalFromRecords = records.fold<double>(
+    final nonReceiptRecords = records.where((r) => !r.isReceipt).toList();
+    final receiptRecords = records.where((r) => r.isReceipt).toList();
+
+    final totalFromNonReceipts = nonReceiptRecords.fold<double>(
       0,
-      (runningTotal, record) =>
-          record.isReceipt ? runningTotal : runningTotal + record.totalAmount,
+      (runningTotal, record) => runningTotal + record.totalAmount,
     );
-    final paid = records
-        .where((record) => !record.isReceipt)
-        .fold<double>(
-          0,
-          (runningTotal, record) => runningTotal + record.paidAmount,
-        );
+
+    final paidFromNonReceipts = nonReceiptRecords.fold<double>(
+      0,
+      (runningTotal, record) => runningTotal + record.paidAmount,
+    );
+    final paidFromReceipts = receiptRecords.fold<double>(
+      0,
+      (runningTotal, record) => runningTotal + record.paidAmount,
+    );
+    final paid = paidFromReceipts > paidFromNonReceipts
+        ? paidFromReceipts
+        : paidFromNonReceipts;
+
     final pendingRecords =
         records
             .where((record) => record.isPending && record.pendingAmount > 0)
@@ -2771,18 +2790,24 @@ class _StudentFeeSummary {
             final bDate = b.dueDate ?? DateTime(2099);
             return aDate.compareTo(bDate);
           });
-    final pending = pendingRecords.fold<double>(
+    final pendingFromRecords = pendingRecords.fold<double>(
       0,
       (runningTotal, record) => runningTotal + record.pendingAmount,
     );
     final finalFee =
-        enrollment?.finalFees ?? course?.defaultFee ?? totalFromRecords;
+        enrollment?.finalFees ?? course?.defaultFee ?? totalFromNonReceipts;
+    final resolvedFinalFee = finalFee > 0 ? finalFee : totalFromNonReceipts;
+
+    final pending = (pendingRecords.isEmpty && paid > 0 && resolvedFinalFee > paid)
+        ? (resolvedFinalFee - paid).clamp(0.0, double.infinity)
+        : pendingFromRecords;
+
     return _StudentFeeSummary(
       student: student,
       enrollment: enrollment,
       course: course,
       records: records,
-      finalFee: finalFee > 0 ? finalFee : totalFromRecords,
+      finalFee: resolvedFinalFee,
       paid: paid,
       pending: pending,
       nextDueDate: pendingRecords.isEmpty ? null : pendingRecords.first.dueDate,

@@ -136,35 +136,35 @@ class _DashboardScreenState extends State<DashboardScreen> {
       firestore
           .collection('students')
           .where('deleted_at', isNull: true)
-          .limit(20)
+          .limit(500)
           .get(),
       firestore
           .collection('fee_payments')
           .where('deleted_at', isNull: true)
-          .limit(20)
+          .limit(100)
           .get(),
       firestore
           .collection('fee_payments')
           .where('status', isEqualTo: 'pending')
           .where('deleted_at', isNull: true)
-          .limit(20)
+          .limit(500)
           .get(),
       firestore
           .collection('fee_payments')
           .where('status', isEqualTo: 'paid')
           .where('deleted_at', isNull: true)
-          .limit(20)
+          .limit(500)
           .get(),
       firestore
           .collection('attendances')
           .where('date', isGreaterThanOrEqualTo: todayKey)
           .where('date', isLessThanOrEqualTo: '$todayKey\uf8ff')
-          .limit(100)
+          .limit(500)
           .get(),
       firestore
           .collection('batches')
           .where('deleted_at', isNull: true)
-          .limit(5)
+          .limit(50)
           .get(),
     ]);
 

@@ -477,7 +477,7 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
               SizedBox(width: 6),
               Text(
-                'Admin & Student Portal',
+                'Admin & Student Login',
                 style: TextStyle(
                   color: AppTheme.primary,
                   fontSize: 13,
@@ -723,51 +723,56 @@ class _LoginScreenState extends State<LoginScreen> {
 
   Widget _buildOptionsRow() {
     return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        InkWell(
-          onTap: _isLoading
-              ? null
-              : () {
-                  setState(() => _rememberMe = !_rememberMe);
-                },
-          borderRadius: BorderRadius.circular(8),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                SizedBox(
-                  width: 22,
-                  height: 22,
-                  child: Checkbox(
-                    value: _rememberMe,
-                    activeColor: AppTheme.primary,
-                    checkColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(5),
+        Flexible(
+          child: InkWell(
+            onTap: _isLoading
+                ? null
+                : () {
+                    setState(() => _rememberMe = !_rememberMe);
+                  },
+            borderRadius: BorderRadius.circular(8),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SizedBox(
+                    width: 22,
+                    height: 22,
+                    child: Checkbox(
+                      value: _rememberMe,
+                      activeColor: AppTheme.primary,
+                      checkColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(5),
+                      ),
+                      side: const BorderSide(color: AppTheme.border, width: 1.5),
+                      visualDensity: VisualDensity.compact,
+                      onChanged: _isLoading
+                          ? null
+                          : (value) =>
+                              setState(() => _rememberMe = value ?? false),
                     ),
-                    side: const BorderSide(color: AppTheme.border, width: 1.5),
-                    visualDensity: VisualDensity.compact,
-                    onChanged: _isLoading
-                        ? null
-                        : (value) =>
-                            setState(() => _rememberMe = value ?? false),
                   ),
-                ),
-                const SizedBox(width: 8),
-                const Text(
-                  'Remember me',
-                  style: TextStyle(
-                    color: AppTheme.text,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
+                  const SizedBox(width: 8),
+                  const Flexible(
+                    child: Text(
+                      'Remember me',
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: AppTheme.text,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
-        const Spacer(),
         TextButton(
           style: TextButton.styleFrom(
             foregroundColor: AppTheme.primary,
@@ -919,7 +924,7 @@ class _LoginScreenState extends State<LoginScreen> {
             ),
             const SizedBox(width: 6),
             const Text(
-              'Need an account? Contact Admin',
+              'Contact Admin to create account',
               style: TextStyle(
                 color: AppTheme.muted,
                 fontSize: 13,

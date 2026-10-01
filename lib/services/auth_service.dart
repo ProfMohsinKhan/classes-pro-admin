@@ -13,7 +13,7 @@ class AuthService {
   static const _prefSavedPassword = 'pref_saved_password';
   static const _prefJustLoggedOut = 'pref_just_logged_out';
 
-  final FirebaseAuth _firebaseAuth = FirebaseAuth.instance;
+  FirebaseAuth get _firebaseAuth => FirebaseAuth.instance;
 
   Stream<User?> get authStateChanges => _firebaseAuth.authStateChanges();
 

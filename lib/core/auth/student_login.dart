@@ -8,8 +8,12 @@ class StudentLogin {
   /// a contact-number-and-password sign-in method.
   static String contactId(String value) {
     var digits = value.replaceAll(RegExp(r'[^0-9]'), '');
-    if (digits.length == 12 && digits.startsWith('91')) {
+    if (digits.length == 13 && digits.startsWith('091')) {
+      digits = digits.substring(3);
+    } else if (digits.length == 12 && digits.startsWith('91')) {
       digits = digits.substring(2);
+    } else if (digits.length == 11 && digits.startsWith('0')) {
+      digits = digits.substring(1);
     }
     if (digits.length < 10 || digits.length > 15) {
       throw const FormatException('Enter a valid student contact number.');

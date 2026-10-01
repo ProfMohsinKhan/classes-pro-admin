@@ -389,8 +389,10 @@ class _InstallmentCard extends StatelessWidget {
       'Partial' => AppTheme.primary,
       _ => AppTheme.warning,
     };
+    final remaining = (item.amount - item.paidAmount).clamp(0.0, double.infinity);
     return _Card(
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           CircleAvatar(
             backgroundColor: color.withValues(alpha: 0.12),
@@ -416,6 +418,17 @@ class _InstallmentCard extends StatelessWidget {
                   'Due ${DateFormat('dd MMM yyyy').format(item.dueDate)}',
                   style: const TextStyle(color: AppTheme.muted, fontSize: 12),
                 ),
+                if (item.status == 'Partial') ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    'Paid: ${_money(item.paidAmount)} • Due: ${_money(remaining)}',
+                    style: const TextStyle(
+                      color: AppTheme.primary,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
