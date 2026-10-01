@@ -778,8 +778,30 @@ class _FeesScreenState extends State<FeesScreen> {
         totalPaid: totalPaidAfterPayment,
         nowIso: nowIso,
       );
+      paidRecordData.addAll({
+        'recordType': 'receipt',
+        'feeType': 'receipt',
+        'total_amount': '0.00',
+      });
       changedRecords.add(_FeeRecord.fromRaw(docRef.id, paidRecordData));
       batch.set(docRef, paidRecordData);
+    }
+
+    final enrollment = summary.enrollment;
+    if (enrollment != null) {
+      batch.set(
+        firestore.collection('enrollments').doc(enrollment.docId),
+        {
+          'paid_amount': totalPaidAfterPayment,
+          'pending_amount': pendingAfterPayment,
+          'dueAmount': pendingAfterPayment,
+          'balance': pendingAfterPayment,
+          'remaining': pendingAfterPayment,
+          'updated_at': nowIso,
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
+      );
     }
 
     await batch.commit();
@@ -2764,23 +2786,75 @@ class _StudentFeeSummary {
     final nonReceiptRecords = records.where((r) => !r.isReceipt).toList();
     final receiptRecords = records.where((r) => r.isReceipt).toList();
 
+    // Distinct payment records matching payment history & latest receipt
+    final receiptRecordNos = records
+        .where((record) => record.isReceipt && record.paidAmount > 0)
+        .map((record) => record.receiptNo)
+        .toSet();
+    final paidRecords =
+        records
+            .where(
+              (record) =>
+                  record.hasPayment &&
+                  (record.isReceipt ||
+                      !receiptRecordNos.contains(record.receiptNo)),
+            )
+            .toList()
+          ..sort((a, b) {
+            final aDate = a.paymentDate ?? DateTime(2000);
+            final bDate = b.paymentDate ?? DateTime(2000);
+            return bDate.compareTo(aDate);
+          });
+
+    final latestPaid = paidRecords.isEmpty ? null : paidRecords.first;
+
+    // Total fee resolution
     final totalFromNonReceipts = nonReceiptRecords.fold<double>(
       0,
       (runningTotal, record) => runningTotal + record.totalAmount,
     );
+    final finalFee =
+        enrollment?.finalFees ?? course?.defaultFee ?? totalFromNonReceipts;
+    final resolvedFinalFee = finalFee > 0 ? finalFee : totalFromNonReceipts;
 
-    final paidFromNonReceipts = nonReceiptRecords.fold<double>(
+    // Sum of paid amounts from distinct payment transactions
+    final paidFromHistory = paidRecords.fold<double>(
       0,
-      (runningTotal, record) => runningTotal + record.paidAmount,
+      (sum, record) => sum + record.paidAmount,
     );
     final paidFromReceipts = receiptRecords.fold<double>(
       0,
       (runningTotal, record) => runningTotal + record.paidAmount,
     );
-    final paid = paidFromReceipts > paidFromNonReceipts
+    final paidFromNonReceipts = nonReceiptRecords
+        .where((r) => r.isPaid || r.hasPayment)
+        .fold<double>(
+          0,
+          (runningTotal, record) => runningTotal + record.paidAmount,
+        );
+    final fallbackPaid = paidFromReceipts > paidFromNonReceipts
         ? paidFromReceipts
         : paidFromNonReceipts;
 
+    final latestTotalPaid = latestPaid != null
+        ? _amount(latestPaid.data['totalPaid'])
+        : 0.0;
+
+    // Resolve paid:
+    // If the latest receipt record explicitly holds totalPaid and it's >= paidFromHistory, use it.
+    // Otherwise use paidFromHistory. If none, use receipt/non-receipt fallback or enrollment.paidAmount.
+    double resolvedPaid = 0.0;
+    if (latestTotalPaid > 0 && latestTotalPaid >= paidFromHistory) {
+      resolvedPaid = latestTotalPaid;
+    } else if (paidFromHistory > 0) {
+      resolvedPaid = paidFromHistory;
+    } else if (fallbackPaid > 0) {
+      resolvedPaid = fallbackPaid;
+    } else if (enrollment != null && enrollment.paidAmount > 0) {
+      resolvedPaid = enrollment.paidAmount;
+    }
+
+    // Pending installment records
     final pendingRecords =
         records
             .where((record) => record.isPending && record.pendingAmount > 0)
@@ -2794,13 +2868,44 @@ class _StudentFeeSummary {
       0,
       (runningTotal, record) => runningTotal + record.pendingAmount,
     );
-    final finalFee =
-        enrollment?.finalFees ?? course?.defaultFee ?? totalFromNonReceipts;
-    final resolvedFinalFee = finalFee > 0 ? finalFee : totalFromNonReceipts;
 
-    final pending = (pendingRecords.isEmpty && paid > 0 && resolvedFinalFee > paid)
-        ? (resolvedFinalFee - paid).clamp(0.0, double.infinity)
-        : pendingFromRecords;
+    final latestPendingAfterPayment = latestPaid != null
+        ? _amount(
+            latestPaid.data['pendingAfterPayment'] ??
+                latestPaid.data['pending_after_payment'],
+          )
+        : null;
+
+    final mathPending = (resolvedFinalFee > resolvedPaid)
+        ? (resolvedFinalFee - resolvedPaid)
+        : 0.0;
+
+    // Resolve pending:
+    double resolvedPending;
+    if (pendingRecords.isNotEmpty && pendingFromRecords > 0) {
+      resolvedPending = pendingFromRecords;
+    } else if (latestPendingAfterPayment != null && latestPendingAfterPayment > 0) {
+      resolvedPending = latestPendingAfterPayment;
+    } else if (mathPending > 0) {
+      resolvedPending = mathPending;
+    } else if (enrollment != null && enrollment.pendingAmount > 0) {
+      resolvedPending = enrollment.pendingAmount;
+    } else {
+      resolvedPending = 0.0;
+    }
+
+    // Resolve nextDueDate:
+    DateTime? resolvedNextDueDate;
+    if (pendingRecords.isNotEmpty) {
+      resolvedNextDueDate = pendingRecords.first.dueDate;
+    }
+    if (resolvedNextDueDate == null && resolvedPending > 0) {
+      resolvedNextDueDate = enrollment?.nextDueDate ??
+          FeeRecordValues.date(
+            latestPaid?.data['nextDueDate'] ??
+                latestPaid?.data['next_due_date'],
+          );
+    }
 
     return _StudentFeeSummary(
       student: student,
@@ -2808,9 +2913,9 @@ class _StudentFeeSummary {
       course: course,
       records: records,
       finalFee: resolvedFinalFee,
-      paid: paid,
-      pending: pending,
-      nextDueDate: pendingRecords.isEmpty ? null : pendingRecords.first.dueDate,
+      paid: resolvedPaid,
+      pending: resolvedPending,
+      nextDueDate: resolvedNextDueDate,
     );
   }
 
@@ -2880,15 +2985,33 @@ class _FeeRecord {
 
   int? get studentId => _int(data['student_id'] ?? data['studentId']);
   int? get enrollmentId => _int(data['enrollment_id']);
-  double get totalAmount =>
-      _amount(data['total_amount'] ?? data['totalFee'] ?? data['finalFee']);
-  double get paidAmount => _amount(
-    data['amount_paid'] ??
-        data['amount'] ??
-        data['amountPaid'] ??
-        data['paid_amount'] ??
-        data['totalPaid'],
+  double get totalAmount => _amount(
+    data['total_amount'] ??
+        data['totalFee'] ??
+        data['finalFee'] ??
+        data['amount'],
   );
+  double get paidAmount {
+    if (isReceipt) {
+      return _amount(
+        data['amount_paid'] ??
+            data['amount'] ??
+            data['amountPaid'] ??
+            data['paid_amount'] ??
+            data['totalPaid'],
+      );
+    }
+    final directPaid = _amount(
+      data['amount_paid'] ?? data['paid_amount'] ?? data['amountPaid'],
+    );
+    if (directPaid > 0) return directPaid;
+    if (isPaid) {
+      return _amount(
+        data['amount'] ?? data['total_amount'] ?? data['dueAmount'],
+      );
+    }
+    return 0.0;
+  }
   double get pendingAmount => FeeRecordValues.outstanding(data);
 
   String get status => data['status']?.toString().toLowerCase() ?? 'pending';
@@ -2943,6 +3066,8 @@ class _EnrollmentInfo {
     this.nextDueDate,
     this.discount = 0,
     this.notes,
+    this.paidAmount = 0,
+    this.pendingAmount = 0,
   });
 
   final String docId;
@@ -2958,6 +3083,8 @@ class _EnrollmentInfo {
   final DateTime? nextDueDate;
   final double discount;
   final String? notes;
+  final double paidAmount;
+  final double pendingAmount;
 
   factory _EnrollmentInfo.fromDoc(
     QueryDocumentSnapshot<Map<String, dynamic>> doc,
@@ -2980,6 +3107,15 @@ class _EnrollmentInfo {
       nextDueDate: _date(data['nextDueDate'] ?? data['next_due_date']),
       discount: _amount(data['discount']),
       notes: data['notes']?.toString(),
+      paidAmount: _amount(
+        data['paid_amount'] ?? data['paidAmount'] ?? data['totalPaid'],
+      ),
+      pendingAmount: _amount(
+        data['pending_amount'] ??
+            data['pendingAmount'] ??
+            data['dueAmount'] ??
+            data['balance'],
+      ),
     );
   }
 }
