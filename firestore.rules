@@ -142,8 +142,12 @@ service cloud.firestore {
         hasPermission('fees.view') ||
         hasPermission('reports.view') ||
         canBackupExport() || ownsStudentData(resource.data);
-      allow create, update, delete: if hasPermission('enrollments.manage') ||
+      allow create, delete: if hasPermission('enrollments.manage') ||
         hasPermission('fees.editPlan') ||
+        canBackupRestore();
+      allow update: if hasPermission('enrollments.manage') ||
+        hasPermission('fees.editPlan') ||
+        hasPermission('fees.editPaymentHistory') ||
         canBackupRestore();
     }
 

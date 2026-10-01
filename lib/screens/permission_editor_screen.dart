@@ -868,7 +868,8 @@ const _permissionGroups = <_PermissionGroup>[
       _PermissionItem(
         key: PermissionKeys.feesEditPaymentHistory,
         label: 'Edit Payment History',
-        description: 'Allow user to correct a payment date, mode, or remarks.',
+        description:
+            'Allow user to correct payment amount, date, mode, or remarks.',
       ),
       _PermissionItem(
         key: PermissionKeys.feesShareReceipt,

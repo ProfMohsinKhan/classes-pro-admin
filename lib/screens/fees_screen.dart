@@ -693,6 +693,16 @@ class _FeesScreenState extends State<FeesScreen> {
           'total_amount': newPending <= 0
               ? record.totalAmount.toStringAsFixed(2)
               : newPending.toStringAsFixed(2),
+          // Keep every legacy balance alias in sync. Some older fee-plan
+          // records include `dueAmount`, which takes precedence when the
+          // dashboard calculates pending fees. Updating only total_amount
+          // made a corrected installment look right in history while the
+          // summary still used the old due balance.
+          'dueAmount': newPending,
+          'pendingAmount': newPending,
+          'pending_amount': newPending,
+          'balance': newPending,
+          'remaining': newPending,
           'status': newPending <= 0 ? 'paid' : 'pending',
           'payment_mode': draft.mode,
           'paymentMode': draft.mode,
@@ -902,6 +912,9 @@ class _FeesScreenState extends State<FeesScreen> {
     FeeHistoryItem item,
     _PaymentHistoryEditDraft draft,
   ) async {
+    if (draft.amount <= 0) {
+      throw Exception('Enter a valid payment amount.');
+    }
     if (!_paymentModes.contains(draft.mode)) {
       throw Exception('Select a valid payment mode.');
     }
@@ -919,6 +932,29 @@ class _FeesScreenState extends State<FeesScreen> {
       );
     }
 
+    final receiptNumbers = summary.records
+        .where((record) => record.isReceipt && record.paidAmount > 0)
+        .map((record) => record.receiptNo)
+        .toSet();
+    final paymentRecords = summary.records
+        .where(
+          (record) =>
+              record.hasPayment &&
+              (record.isReceipt || !receiptNumbers.contains(record.receiptNo)),
+        )
+        .toList();
+    final correctedTotalPaid = paymentRecords.fold<double>(0, (total, record) {
+      final isEditedPayment =
+          record.docId == item.recordId ||
+          (record.isReceipt && record.receiptNo == item.receiptNo);
+      return total + (isEditedPayment ? draft.amount : record.paidAmount);
+    });
+    if (correctedTotalPaid > summary.finalFee + 0.009) {
+      throw Exception(
+        'Total collected amount cannot be greater than the final fee.',
+      );
+    }
+
     final now = DateTime.now();
     final nowIso = now.toIso8601String();
     final authUser = AuthService.instance.currentUser;
@@ -926,6 +962,7 @@ class _FeesScreenState extends State<FeesScreen> {
         ? appUser.email
         : appUser.name.trim();
     final audit = <String, dynamic>{
+      'previousAmount': item.amount,
       'previousPaymentDate': item.date?.toIso8601String(),
       'previousPaymentMode': item.mode,
       'previousRemarks': item.remarks,
@@ -934,11 +971,17 @@ class _FeesScreenState extends State<FeesScreen> {
       'editedByName': editorName,
     };
     final batch = FirebaseFirestore.instance.batch();
-    final updatedRecords = <_FeeRecord>[];
+    final updatedById = {
+      for (final record in summary.records) record.docId: record,
+    };
+    final changedRecordIds = <String>{};
 
     for (final record in records) {
+      final isAmountRecord = record.docId == item.recordId || record.isReceipt;
       final data = <String, dynamic>{
         ...record.data,
+        if (isAmountRecord) 'amount': draft.amount,
+        if (isAmountRecord) 'amount_paid': draft.amount.toStringAsFixed(2),
         'payment_date': draft.paymentDate.toIso8601String(),
         'paymentDate': Timestamp.fromDate(draft.paymentDate),
         'paidDate': draft.paymentDate.toIso8601String(),
@@ -951,14 +994,150 @@ class _FeesScreenState extends State<FeesScreen> {
         'paymentHistoryLastEditedAt': Timestamp.fromDate(now),
         'paymentHistoryLastEditedBy': authUser?.uid ?? appUser.uid,
         'paymentHistoryLastEditedByName': editorName,
-        'paymentHistoryEditCount': FieldValue.increment(1),
+        'paymentHistoryEditCount':
+            (_int(record.data['paymentHistoryEditCount']) ?? 0) + 1,
         'updated_at': nowIso,
         'updatedAt': FieldValue.serverTimestamp(),
       };
-      updatedRecords.add(record.copyWith(data: data));
+      updatedById[record.docId] = record.copyWith(data: data);
+      changedRecordIds.add(record.docId);
+    }
+
+    // Rebuild installment balances from the receipt ledger. A planned
+    // installment stores its remaining amount in total_amount, so changing a
+    // historical payment must redistribute all payments to keep Paid and
+    // Pending totals correct.
+    final installments =
+        summary.records
+            .where(
+              (record) => !record.isReceipt && record.installmentNo != null,
+            )
+            .toList()
+          ..sort((a, b) {
+            final numberCompare = a.installmentNo!.compareTo(b.installmentNo!);
+            if (numberCompare != 0) return numberCompare;
+            return (a.dueDate ?? DateTime(2099)).compareTo(
+              b.dueDate ?? DateTime(2099),
+            );
+          });
+    final correctedPayments =
+        paymentRecords.map((record) {
+          final current = updatedById[record.docId] ?? record;
+          final isEditedPayment =
+              record.docId == item.recordId ||
+              (record.isReceipt && record.receiptNo == item.receiptNo);
+          return _CorrectedPayment(
+            record: current,
+            amount: isEditedPayment ? draft.amount : record.paidAmount,
+          );
+        }).toList()..sort((a, b) {
+          final dateCompare = (a.record.paymentDate ?? DateTime(2000))
+              .compareTo(b.record.paymentDate ?? DateTime(2000));
+          if (dateCompare != 0) return dateCompare;
+          return a.record.docId.compareTo(b.record.docId);
+        });
+
+    if (installments.isNotEmpty) {
+      final plannedAmounts = <String, double>{
+        for (final record in installments)
+          record.docId: record.isPaid
+              ? record.totalAmount
+              : record.totalAmount + record.paidAmount,
+      };
+      final paidByInstallment = <String, double>{
+        for (final record in installments) record.docId: 0,
+      };
+      for (final payment in correctedPayments) {
+        var remaining = payment.amount;
+        for (final installment in installments) {
+          if (remaining <= 0.009) break;
+          final planned = plannedAmounts[installment.docId] ?? 0;
+          final alreadyPaid = paidByInstallment[installment.docId] ?? 0;
+          final available = planned - alreadyPaid;
+          if (available <= 0.009) continue;
+          final applied = remaining < available ? remaining : available;
+          paidByInstallment[installment.docId] = alreadyPaid + applied;
+          remaining -= applied;
+        }
+      }
+
+      for (final installment in installments) {
+        final current = updatedById[installment.docId] ?? installment;
+        final planned = plannedAmounts[installment.docId] ?? 0;
+        final paid = paidByInstallment[installment.docId] ?? 0;
+        final remaining = (planned - paid).clamp(0, double.infinity).toDouble();
+        final isPaid = remaining <= 0.009;
+        final data = <String, dynamic>{
+          ...current.data,
+          'amount_paid': paid.toStringAsFixed(2),
+          'total_amount': (isPaid ? planned : remaining).toStringAsFixed(2),
+          // Fee records have used several names for their outstanding
+          // balance. They must all reflect the recalculated installment so
+          // the detail header, Fees summary, reports and student portal see
+          // the same Paid/Pending values immediately after an edit.
+          'dueAmount': remaining,
+          'pendingAmount': remaining,
+          'pending_amount': remaining,
+          'balance': remaining,
+          'remaining': remaining,
+          'status': isPaid ? 'paid' : 'pending',
+          'updated_at': nowIso,
+          'updatedAt': FieldValue.serverTimestamp(),
+        };
+        updatedById[installment.docId] = current.copyWith(data: data);
+        changedRecordIds.add(installment.docId);
+      }
+    }
+
+    var runningPaid = 0.0;
+    for (final payment in correctedPayments) {
+      runningPaid += payment.amount;
+      final current = updatedById[payment.record.docId] ?? payment.record;
+      final pendingAfter = (summary.finalFee - runningPaid)
+          .clamp(0, double.infinity)
+          .toDouble();
+      final data = <String, dynamic>{
+        ...current.data,
+        if (current.isReceipt) 'amount': payment.amount,
+        if (current.isReceipt) 'amount_paid': payment.amount.toStringAsFixed(2),
+        'totalPaid': runningPaid,
+        'pendingAfterPayment': pendingAfter,
+        'pending_after_payment': pendingAfter,
+        'updated_at': nowIso,
+        'updatedAt': FieldValue.serverTimestamp(),
+      };
+      updatedById[current.docId] = current.copyWith(data: data);
+      changedRecordIds.add(current.docId);
+    }
+
+    for (final recordId in changedRecordIds) {
+      final updated = updatedById[recordId];
+      if (updated == null) continue;
       batch.set(
-        FirebaseFirestore.instance.collection('fee_payments').doc(record.docId),
-        data,
+        FirebaseFirestore.instance.collection('fee_payments').doc(recordId),
+        updated.data,
+        SetOptions(merge: true),
+      );
+    }
+
+    final enrollment = summary.enrollment;
+    if (enrollment != null) {
+      final pending = (summary.finalFee - correctedTotalPaid)
+          .clamp(0, double.infinity)
+          .toDouble();
+      batch.set(
+        FirebaseFirestore.instance
+            .collection('enrollments')
+            .doc(enrollment.docId),
+        {
+          'paid_amount': correctedTotalPaid,
+          'pending_amount': pending,
+          'dueAmount': pending,
+          'balance': pending,
+          'remaining': pending,
+          'updated_at': nowIso,
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
         SetOptions(merge: true),
       );
     }
@@ -970,25 +1149,17 @@ class _FeesScreenState extends State<FeesScreen> {
         if (current.student.numericId != summary.student.numericId) {
           return current;
         }
-        final byId = {
-          for (final record in current.records) record.docId: record,
-        };
-        for (final record in updatedRecords) {
-          byId[record.docId] = record;
-        }
         return _StudentFeeSummary.fromData(
           student: current.student,
           enrollment: current.enrollment,
           course: current.course,
-          records: byId.values.toList(),
+          records: updatedById.values.toList(),
         );
       }).toList();
     });
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(
-          'Payment ${item.receiptNo} updated. Totals were not changed.',
-        ),
+        content: Text('Payment ${item.receiptNo} and fee totals updated.'),
         backgroundColor: AppTheme.success,
         behavior: SnackBarBehavior.floating,
       ),
@@ -1820,6 +1991,7 @@ class _EditPaymentHistorySheet extends StatefulWidget {
 }
 
 class _EditPaymentHistorySheetState extends State<_EditPaymentHistorySheet> {
+  late final TextEditingController _amountController;
   late final TextEditingController _remarksController;
   late DateTime _paymentDate;
   late String _mode;
@@ -1830,6 +2002,9 @@ class _EditPaymentHistorySheetState extends State<_EditPaymentHistorySheet> {
     super.initState();
     _paymentDate = widget.item.date ?? DateTime.now();
     _mode = _normalizedPaymentMode(widget.item.mode);
+    _amountController = TextEditingController(
+      text: widget.item.amount.toStringAsFixed(2),
+    );
     _remarksController = TextEditingController(text: widget.item.remarks);
   }
 
@@ -1871,11 +2046,20 @@ class _EditPaymentHistorySheetState extends State<_EditPaymentHistorySheet> {
               style: const TextStyle(color: AppTheme.primary),
             ),
             const SizedBox(height: 4),
-            Text(
-              'Amount ${_money(widget.item.amount)} stays unchanged. Linked receipt details update automatically.',
-              style: const TextStyle(color: AppTheme.muted, fontSize: 12),
+            const Text(
+              'Correcting the amount also updates paid, pending, installments, and linked receipt totals.',
+              style: TextStyle(color: AppTheme.muted, fontSize: 12),
             ),
             const SizedBox(height: 18),
+            _SheetField(
+              controller: _amountController,
+              label: 'Amount Paid',
+              icon: Icons.currency_rupee_rounded,
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
+            ),
+            const SizedBox(height: 12),
             InkWell(
               onTap: _isSaving ? null : _pickDate,
               borderRadius: BorderRadius.circular(14),
@@ -1969,6 +2153,7 @@ class _EditPaymentHistorySheetState extends State<_EditPaymentHistorySheet> {
     try {
       await widget.onSave(
         _PaymentHistoryEditDraft(
+          amount: _amount(_amountController.text),
           paymentDate: _paymentDate,
           mode: _mode,
           remarks: _remarksController.text.trim(),
@@ -1990,6 +2175,7 @@ class _EditPaymentHistorySheetState extends State<_EditPaymentHistorySheet> {
 
   @override
   void dispose() {
+    _amountController.dispose();
     _remarksController.dispose();
     super.dispose();
   }
@@ -2888,14 +3074,23 @@ class _FeePlanDraft {
 
 class _PaymentHistoryEditDraft {
   const _PaymentHistoryEditDraft({
+    required this.amount,
     required this.paymentDate,
     required this.mode,
     required this.remarks,
   });
 
+  final double amount;
   final DateTime paymentDate;
   final String mode;
   final String remarks;
+}
+
+class _CorrectedPayment {
+  const _CorrectedPayment({required this.record, required this.amount});
+
+  final _FeeRecord record;
+  final double amount;
 }
 
 InputDecoration _sheetDecoration(String label, IconData icon) {

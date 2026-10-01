@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../models/app_user_model.dart';
 import '../services/institute_settings_service.dart';
+import '../services/attendance_reminder_service.dart';
 import '../services/user_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_drawer.dart';
@@ -34,6 +37,39 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void initState() {
     super.initState();
     _dashboardFuture = _loadDashboardData();
+    AttendanceReminderService.instance.bindAttendanceNavigation(
+      _openAttendanceFromReminder,
+    );
+    unawaited(_setupAttendanceReminders());
+  }
+
+  @override
+  void dispose() {
+    AttendanceReminderService.instance.clearAttendanceNavigationHandler();
+    super.dispose();
+  }
+
+  Future<void> _openAttendanceFromReminder() async {
+    if (!mounted) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (context) => const AttendanceScreen()),
+    );
+  }
+
+  Future<void> _setupAttendanceReminders() async {
+    if (!widget.appUser.canMarkAttendance) return;
+    final result = await AttendanceReminderService.instance
+        .scheduleForActiveAdmin();
+    if (!mounted || !result.isSupported || result.notificationsAllowed) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Enable notifications to receive the daily attendance reminder.',
+        ),
+        backgroundColor: AppTheme.warning,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
   }
 
   void _refreshDashboard() {

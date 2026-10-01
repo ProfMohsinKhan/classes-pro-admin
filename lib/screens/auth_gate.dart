@@ -71,9 +71,75 @@ class _AuthLoadingScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const Scaffold(
-      backgroundColor: AppTheme.background,
-      body: Center(child: CircularProgressIndicator(color: AppTheme.primary)),
+    return Scaffold(
+      backgroundColor: const Color(0xFFF8FAFC),
+      body: Stack(
+        children: [
+          Positioned.fill(
+            child: Container(
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Color(0xFFEFF6FF),
+                    Color(0xFFF8FAFC),
+                    Color(0xFFF1F5F9),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Container(
+                  width: 82,
+                  height: 82,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: AppTheme.border, width: 1.5),
+                    boxShadow: [
+                      BoxShadow(
+                        color: AppTheme.primary.withValues(alpha: 0.12),
+                        blurRadius: 24,
+                        offset: const Offset(0, 8),
+                      ),
+                    ],
+                  ),
+                  child: Image.asset(
+                    'assets/icon/logo.png',
+                    fit: BoxFit.contain,
+                  ),
+                ),
+                const SizedBox(height: 20),
+                const Text(
+                  'Mak Tutorials',
+                  style: TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w900,
+                    color: AppTheme.text,
+                    letterSpacing: -0.4,
+                  ),
+                ),
+                const SizedBox(height: 18),
+                const SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2.6,
+                    color: AppTheme.primary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
+
